@@ -5,6 +5,7 @@ library(spacetime)
 library(INLA)
 library(here)
 library(raster)
+library(tidyverse)
 
 #__________
 # Load data
@@ -25,7 +26,6 @@ sp_rich@data$year = year
 explan@data$year = year
 
 # model fits ===================================================================
-
 
 #-------
 # Priors
@@ -229,7 +229,8 @@ for(i in uniqueYears){
 
 write.csv(stressWAIC, file = here("./ModelOutputs/occ_stressWAIC.csv"))
 
-#
+# results ======================================================================
+
 energyWAIC <- read.csv(here("./ModelOutputs/occ_energyWAIC.csv"), 
                             row.names = 1)
 productivityWAIC <- read.csv(here("./ModelOutputs/occ_productivityWAIC.csv"), 
@@ -241,52 +242,99 @@ habitatWAIC <- read.csv(here("./ModelOutputs/occ_habitatWAIC.csv"),
 stressWAIC <- read.csv(here("./ModelOutputs/occ_stressWAIC.csv"), 
                        row.names = 1)
 
-# Check best family 
-sort((energyWAIC[,1] - energyWAIC[,2])[which((energyWAIC[,1] - energyWAIC[,2]) > 0)])
-sort((productivityWAIC[,1] - productivityWAIC[,2])[which((productivityWAIC[,1] - productivityWAIC[,2]) > 0)])
-sort((climateWAIC[,1] - climateWAIC[,2])[which((climateWAIC[,1] - climateWAIC[,2]) > 0)])
-sort((habitatWAIC[,1] - habitatWAIC[,2])[which((habitatWAIC[,1] - habitatWAIC[,2]) > 0)])
-sort((stressWAIC[,1] - stressWAIC[,2])[which((stressWAIC[,1] - stressWAIC[,2]) > 0)])
-
 # Check non-convergence problem (no in binomial so I will focus on binomial) 
-any(is.infinite(energyWAIC[,1]))
-any(is.infinite(productivityWAIC[,1]))
-any(is.infinite(climateWAIC[,1]))
-any(is.infinite(habitatWAIC[,1]))
-any(is.infinite(stressWAIC[,1]))
+ifelse(
+  any(
+    any(is.infinite(energyWAIC[,1])),
+    any(is.infinite(productivityWAIC[,1])),
+    any(is.infinite(climateWAIC[,1])),
+    any(is.infinite(habitatWAIC[,1])),
+    any(is.infinite(stressWAIC[,1]))),
+  stop("ERROR - Non-convergence"), 
+  print("No non-convergence"))
+
 
 #----------------------
 # Check best hypothesis
 #----------------------
-hypoBinomial <- cbind(energyWAIC[,1],
-                      productivityWAIC[,1],
-                      climateWAIC[,1],
-                      habitatWAIC[,1],
-                      stressWAIC[,1])
+poisson <- cbind(energyWAIC[,1],
+                  productivityWAIC[,1],
+                  climateWAIC[,1],
+                  habitatWAIC[,1],
+                  stressWAIC[,1])
 
-colnames(hypoBinomial) <- c("energy", 
+colnames(poisson) <- c("energy", 
                             "productivity", 
                             "climate", 
                             "habitat", 
                             "stress")
 
 # Find best hypothesis
-bestHypoSp <- apply(hypoBinomial, 1, which.min)
+bestHypopoi <- apply(poisson, 1, which.min)
 
 # Find WAIC difference between best hypothesis and other hypothesis 
-hypoBinomialDiff <- matrix(NA,nrow = nrow(hypoBinomial),
-                            ncol = ncol(hypoBinomial))
+poissonDiff <- matrix(NA,nrow = nrow(poisson),
+                            ncol = ncol(poisson))
 
-colnames(hypoBinomialDiff) <- colnames(hypoBinomial)
-rownames(hypoBinomialDiff) <- rownames(hypoBinomial)
+colnames(poissonDiff) <- colnames(poisson)
+rownames(poissonDiff) <- rownames(poisson)
 
-for(i in 1:nrow(hypoBinomialDiff)){
-  hypoBinomialDiff[i,] <- hypoBinomial[i,]-hypoBinomial[i,bestHypoSp[i]]
+for(i in 1:nrow(poissonDiff)){
+  poissonDiff[i,] <- poisson[i,]-poisson[i,bestHypopoi[i]]
 }
 
 # Organize and save results
-abund <- colSums(sp@data)
-occ <- colSums(sp@data>0)
-WAICres <-  data.frame(round(hypoBinomialDiff,3), fishInver = fishInvert, abundance = abund, occurrence = occ)
+write.csv(poissonDiff, file = here("./ModelOutputs/occ_WAICDiff_Hypothese.csv"))
 
-write.csv(WAICres, file = "./Results/occ_WAICDiff_Hypothese.csv")
+
+waic_sig_table = matrix(NA, nrow = nrow(poisson),
+                        ncol = ncol(poisson))
+colnames(waic_sig_table) = colnames(poissonDiff)
+rownames(waic_sig_table) = uniqueYears
+
+for(i in 1:50) {
+  for(j in 1:5) { 
+    if(poissonDiff[i,j] == 0){ # best model
+      waic_sig_table[i,j] = 1
+    } else if((poissonDiff[i,j] > 0) & (poissonDiff[i,j] < 2)) { # close to best
+      waic_sig_table[i,j] = 2
+    } else if((poissonDiff[i,j] > 2) & (poissonDiff[i,j] < 10)) { # not too far
+      waic_sig_table[i,j] = 3
+    } else { # not at all good model
+      waic_sig_table[i,j] = 4
+    }
+  }
+}
+
+waic_sig_table_df = data.frame(waic_sig_table)
+waic_sig_table_df$year = rownames(waic_sig_table)
+
+waic_sig_table_df_long = tidyr::pivot_longer(
+  waic_sig_table_df,
+  cols = c("energy", "productivity", "climate", "habitat", "stress"),
+  names_to = "hypothesis",
+  values_to = "waic")
+waic_sig_table_df_long$waic = as.factor(waic_sig_table_df_long$waic)
+
+waic_sig_table_df_long = waic_sig_table_df_long %>% 
+  mutate(cat_waic = 
+           case_when(
+             waic == 1 ~ "dWAIC = 0.0",
+             waic == 2 ~ "0.0 < dWAIC <= 2.0", 
+             waic == 3 ~ "2.0 < dWAIC <= 10.0",
+             waic == 4 ~ "dWAIC > 10.0")
+  )
+
+ggplot(waic_sig_table_df_long, 
+       aes(x = hypothesis, y = year)) + 
+  geom_tile(aes(fill = cat_waic), colour = "white") + 
+  scale_fill_manual("wAIC levels", values=c("red", "blue", "black", "green"))
+
+
+
+
+
+
+
+
+
