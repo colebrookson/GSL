@@ -279,18 +279,51 @@ poissonDiff <- matrix(NA,nrow = nrow(poisson),
 colnames(poissonDiff) <- colnames(poisson)
 rownames(poissonDiff) <- rownames(poisson)
 
+# fill in the differential values
 for(i in 1:nrow(poissonDiff)){
   poissonDiff[i,] <- poisson[i,]-poisson[i,bestHypopoi[i]]
 }
 
+# turn the delta WAIC to a 1-0 scale - 1 is the best model 
+poissonDiffScaled = exp(-poissonDiff/2)
+
 # Organize and save results
 write.csv(poissonDiff, file = here("./ModelOutputs/occ_WAICDiff_Hypothese.csv"))
+write.csv(poissonDiffScaled, 
+          file = here("./ModelOutputs/occ_WAICDiff_Scaled_Hypotheses.csv"))
 
+# make results plots ===========================================================
 
 waic_sig_table = matrix(NA, nrow = nrow(poisson),
                         ncol = ncol(poisson))
 colnames(waic_sig_table) = colnames(poissonDiff)
 rownames(waic_sig_table) = uniqueYears
+
+# scaled poisson to the long form for plot
+waicScaledTable = data.frame(poissonDiffScaled)
+waicScaledTable$year = uniqueYears
+
+waicScaledTableLong = tidyr::pivot_longer(
+  waicScaledTable,
+  cols = c("energy", "productivity", "climate", "habitat", "stress"),
+  names_to = "hypothesis",
+  values_to = "scaled_waic"
+)
+
+scaledWAICPlot = ggplot(data = waicScaledTableLong) +
+  geom_tile(aes(x = hypothesis, y = year, fill = scaled_waic)) +
+  scale_fill_gradient("Scaled wAIC", low = "#fd5800", high = "#640064") +
+  labs(x = "Hypothesis", y = "Year") +
+  theme_bw() +
+  theme(
+    axis.text = element_text(size = 20),
+    legend.text = element_text(size = 14),
+    legend.title = element_text(size = 18)
+  )
+ggsave(here("./Output/TemporalRichnessModels/Figs/SimpleScaledModel.png"),
+       scaledWAICPlot, width = 10, height = 8)
+
+# make a version of the plot with significance levels ==========================
 
 for(i in 1:50) {
   for(j in 1:5) { 
@@ -324,11 +357,18 @@ waic_sig_table_df_long = waic_sig_table_df_long %>%
              waic == 3 ~ "2.0 < dWAIC <= 10.0",
              waic == 4 ~ "dWAIC > 10.0")
   )
+waic_sig_table_df_long$cat_waic = 
+  factor(waic_sig_table_df_long$cat_waic,
+         levels = c("dWAIC = 0.0", "0.0 < dWAIC <= 2.0",
+                    "2.0 < dWAIC <= 10.0", "dWAIC > 10.0"))
+
+exp(-waic)
 
 ggplot(waic_sig_table_df_long, 
        aes(x = hypothesis, y = year)) + 
   geom_tile(aes(fill = cat_waic), colour = "white") + 
-  scale_fill_manual("wAIC levels", values=c("red", "blue", "black", "green"))
+  scale_fill_manual("wAIC levels", values=c("red", "blue", "black", "green")) +
+  labs(x = "Hypothesis", y = "Year")
 
 
 
